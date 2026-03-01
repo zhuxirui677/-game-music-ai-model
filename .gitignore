@@ -1,0 +1,61 @@
+# Ignore Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+
+# Project specific - Large data files
+fma_data/
+weak_beat_music/
+test_music/
+*.mp3
+*.wav
+*.flac
+
+# Training outputs
+checkpoints/
+logs/
+evaluation/
+*.pt
+*.pth
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Data and temporary files
+*.csv
+*.json
+!config_template.json
+!requirements.txt
+*.pkl
+*.pickle
+*.h5
+
+# Documentation temp
+*.pdf
+*.aux
+*.log
+*.out
