@@ -18,12 +18,12 @@ Usage (Colab):
       --kl_weight   0.01
 """
 
-import sys, os, argparse, json, time
+import sys, os, argparse, json, time, random
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
 # ── resolve project paths ─────────────────────────────────────────────────────
@@ -64,6 +64,13 @@ def parse_args():
     p.add_argument('--low_freq_cutoff', type=int, default=16,
                    help='MSE applied only to mel bands >= this (frees low-freq for beat)')
     p.add_argument('--log_interval', type=int, default=5, help='Print every N epochs')
+    p.add_argument('--train_ratio', type=float, default=0.70, help='Train split ratio')
+    p.add_argument('--val_ratio',   type=float, default=0.15, help='Val split ratio')
+    # test_ratio = 1 - train_ratio - val_ratio  (default 0.15)
+    p.add_argument('--split_seed',  type=int,   default=42,   help='Random seed for split')
+    p.add_argument('--split_file',  type=str,   default=None,
+                   help='If given, load/save the train/val/test file split as JSON '
+                        '(ensures test set never leaks into training across runs)')
     return p.parse_args()
 
 
@@ -157,13 +164,61 @@ def main():
     print(f'Device: {device}')
     os.makedirs(args.save_dir, exist_ok=True)
 
-    # ── dataset ───────────────────────────────────────────────────────────
+    # ── dataset & 3-way split (by FILE, not by window) ────────────────────
     print('Loading dataset...')
-    dataset    = MusicDataset(data_dir=args.data_dir)
-    n_train    = int(0.85 * len(dataset))
-    n_val      = len(dataset) - n_train
-    train_ds, val_ds = random_split(dataset, [n_train, n_val])
-    print(f'Train: {n_train}  Val: {n_val}')
+    dataset = MusicDataset(data_dir=args.data_dir)
+
+    split_path = args.split_file or os.path.join(args.save_dir, 'data_split.json')
+
+    if os.path.exists(split_path):
+        # Load existing split → guarantees identical test set across re-runs
+        with open(split_path) as f:
+            split = json.load(f)
+        train_files = set(split['train'])
+        val_files   = set(split['val'])
+        test_files  = set(split['test'])
+        print(f'Loaded existing split from {split_path}')
+    else:
+        # Build new split by file (not by window index)
+        all_files = sorted(set(str(fp) for fp, _ in dataset.samples))
+        random.seed(args.split_seed)
+        random.shuffle(all_files)
+
+        n  = len(all_files)
+        n_train = int(args.train_ratio * n)
+        n_val   = int(args.val_ratio   * n)
+        # remaining goes to test
+        train_files = set(all_files[:n_train])
+        val_files   = set(all_files[n_train:n_train + n_val])
+        test_files  = set(all_files[n_train + n_val:])
+
+        split = {
+            'train': sorted(train_files),
+            'val':   sorted(val_files),
+            'test':  sorted(test_files),
+            'seed':  args.split_seed,
+            'ratios': [args.train_ratio, args.val_ratio,
+                       round(1 - args.train_ratio - args.val_ratio, 4)],
+        }
+        os.makedirs(args.save_dir, exist_ok=True)
+        with open(split_path, 'w') as f:
+            json.dump(split, f, indent=2)
+        print(f'Created new split → saved to {split_path}')
+
+    # Map window indices to splits
+    train_idx = [i for i, (fp, _) in enumerate(dataset.samples) if str(fp) in train_files]
+    val_idx   = [i for i, (fp, _) in enumerate(dataset.samples) if str(fp) in val_files]
+    test_idx  = [i for i, (fp, _) in enumerate(dataset.samples) if str(fp) in test_files]
+
+    print(f'\nSplit (by file):')
+    print(f'  Train : {len(train_files):4d} files  → {len(train_idx):5d} windows')
+    print(f'  Val   : {len(val_files):4d} files  → {len(val_idx):5d} windows')
+    print(f'  Test  : {len(test_files):4d} files  → {len(test_idx):5d} windows')
+    print(f'  NOTE: Test set is saved to {split_path} and will NOT be used during training.')
+
+    train_ds = Subset(dataset, train_idx)
+    val_ds   = Subset(dataset, val_idx)
+    # test_ds is intentionally NOT used here — use evaluate_v2.py after training
 
     train_loader = DataLoader(train_ds, batch_size=args.batch_size,
                               shuffle=True,  num_workers=0, pin_memory=False)
